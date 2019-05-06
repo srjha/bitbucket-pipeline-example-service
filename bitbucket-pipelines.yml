@@ -1,0 +1,48 @@
+image: node:10.15.0
+pipelines:
+  default:
+    - step:
+        deployment: test
+        script:
+        # Pre setup
+          - mkdir -p ~/bin
+          - cd ~/bin
+          - export PATH="$PATH:/root/bin"
+          - apt-get update && apt-get install -y unzip python-pip 
+          # Installing aws iam auth
+          - pip install awscli
+          - curl -o aws-iam-authenticator https://amazon-eks.s3-us-west-2.amazonaws.com/1.12.7/2019-03-27/bin/linux/amd64/aws-iam-authenticator
+          - chmod +x ./aws-iam-authenticator
+          
+          # Building docker image and push to ECR
+          - cd $BITBUCKET_CLONE_DIR
+          - echo $(aws ecr get-login --no-include-email --region us-east-1)  > login.sh
+          - sh login.sh
+          - docker build -t $DOCKER_IMAGE_NAME:${BITBUCKET_COMMIT} .
+          - CURRENT_DOCKER_IMAGE_URL=$DOCKER_ECR_REPO_URL/$DOCKER_IMAGE_NAME:${BITBUCKET_COMMIT}
+          - docker tag $DOCKER_IMAGE_NAME:${BITBUCKET_COMMIT} $CURRENT_DOCKER_IMAGE_URL
+          - docker push $CURRENT_DOCKER_IMAGE_URL
+          - echo Built docker image is $CURRENT_DOCKER_IMAGE_URL
+          
+          # Kubectl installation
+          - apt-get update && apt-get install -y apt-transport-https
+          - curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
+          - echo "deb https://apt.kubernetes.io/ kubernetes-xenial main" | tee -a /etc/apt/sources.list.d/kubernetes.list
+          - apt-get update
+          - apt-get install -y kubectl
+          
+          # AWS IAM Auth check
+          - aws-iam-authenticator help
+                 
+           # Kubectl config and pushing new deployment
+          - aws s3 cp s3://$KUBE_CONFIG_CM_BUCKET/$AUTH_CM_FILE $AUTH_CM_FILE
+          - ls -a
+          - aws eks --region us-east-1 describe-cluster --name $CLUSTER_NAME --query cluster.status
+          - aws eks --region us-east-1 update-kubeconfig --name $CLUSTER_NAME
+          - kubectl apply -f config_map_aws_auth.yaml
+          #- kubectl create -f hello-njs-deployment.yaml
+          #- kubectl expose deployment $K8S_DEPLOYMENT_NAME --type=LoadBalancer --name=$K8S_DEPLOYMENT_NAME
+          - kubectl --namespace=default set image deployment/$K8S_DEPLOYMENT_NAME $K8S_DEPLOYMENT_NAME=$CURRENT_DOCKER_IMAGE_URL
+
+options:
+  docker: true
